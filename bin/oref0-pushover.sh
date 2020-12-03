@@ -89,6 +89,8 @@ elif [[ $ONLYFOR =~ "carb" ]] && ! cat $FILE | egrep "add'l"; then
     echo "No additional carbs required."   
 elif [[ $ONLYFOR =~ "insulin" ]] && ! cat $FILE | egrep "maxBolus"; then
     echo "No additional insulin required."
+elif cat $FILE | egrep "add'l"; then
+    curl -s -F "token=$TOKEN" -F "user=$USER" $SOUND_OPTION -F "message=$(jq -c '"Треб. углеводов: " + (.carbsReq|tostring) + "г. Треб. инсулина: " + (.insulinReq|tostring) + "U"' $FILE) - $(hostname)" https://api.pushover.net/1/messages.json && touch monitor/pushover-sent
 else
     curl -s -F token=$TOKEN -F user=$USER $SOUND_OPTION -F priority=$PRIORITY $PRIORITY_OPTIONS -F "message=$(jq -c "{bg, tick, carbsReq, insulinReq, reason}|del(.[] | nulls)" $FILE) - $(hostname)" https://api.pushover.net/1/messages.json && touch monitor/pushover-sent && echo '{"date":'$(epochtime_now)',"device":"openaps://'$(hostname)'","snooze":"carbsReq"}' | tee /tmp/snooze.json && ns-upload $NIGHTSCOUT_HOST $API_SECRET devicestatus.json /tmp/snooze.json
     echo
@@ -160,8 +162,8 @@ else
     text="${bgNow}${direction}"
     title="cob ${cob}, iob ${iob}"
 
-#    echo "pushover glance text=${text}  subtext=${subtext}  delta=${delta} title=${title}  battery percent=${battery}"
-    curl -s -F "token=$TOKEN" -F "user=$USER" -F "text=${text}" -F "subtext=${subtext}" -F "count=$bgNow" -F "percent=${battery}" -F "title=${title}"   https://api.pushover.net/1/glances.json
+    echo "pushover glance text=${text}  subtext=${subtext}  delta=${delta} title=${title}  battery percent=${battery}"
+#    curl -s -F "token=$TOKEN" -F "user=$USER" -F "text=${text}" -F "subtext=${subtext}" -F "count=$bgNow" -F "percent=${battery}" -F "title=${title}"   https://api.pushover.net/1/glances.json
     touch $GLANCES
   fi
 fi

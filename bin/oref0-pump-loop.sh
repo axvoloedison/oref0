@@ -45,6 +45,7 @@ main() {
         echo && echo "Starting oref0-pump-loop at $(date) with $upto30s second wait_for_silence:"
         try_fail wait_for_bg
         try_fail wait_for_silence $upto30s
+        try_return smb_cmd_handle
         retry_fail preflight
         try_fail if_mdt_get_bg
         # try_fail refresh_old_pumphistory
@@ -951,5 +952,71 @@ try_fail() {
 try_return() {
     "$@" || { echo "Couldn't $*" - continuing; return 1; }
 }
+
+# #################  myown start ##############################
+function smb_cmd_handle() {
+# jq .[0].iob monitor/iob.json   
+# smb_verify_status
+    echo -n "Checking smb command: "
+    url="${NIGHTSCOUT_HOST}/api/v1/experiments/smb?${API_SECRET}"
+    curl -m 5 -s  -X DELETE $url > rawbolus/smb-raw.json
+    if (grep -q '"units":' rawbolus/smb-raw.json); then
+        cp rawbolus/smb-raw.json rawbolus/smb-cmd.json
+        echo "got it!"
+    else
+        echo "no command"    
+    fi
+    echo
+
+    if [ -e "rawbolus/smb-cmd.json" ] && (grep -q '"units":' rawbolus/smb-cmd.json); then
+      echo -n "BOLUS:CMD " && cat rawbolus/smb-cmd.json | nonl
+      echo
+
+        if (( $(date +%s) - $(date -d $(jq -r .created rawbolus/smb-cmd.json | tr -d '"') +%s) > 5*60 )); then
+            postfix=$(date '+%Y%m%d%H%M%S')
+            echo "BOLUS:ERR Bolus request more that 5 min old. Skipping"
+            mv rawbolus/smb-cmd.json rawbolus/smb-cmd-skip.json.$postfix
+                if [[ -n $PUSHOVER_TOKEN ]] && [[ -n $PUSHOVER_USER ]]; then
+                    SOUND="none"
+                    BFILE="rawbolus/smb-cmd-skip.json.$postfix"
+                    curl -s -F "token=$PUSHOVER_TOKEN" -F "user=$PUSHOVER_USER" -F "sound=$SOUND" -F "message=Добавление $(jq -c '(.units|tostring)' $BFILE)U инсулина отменено: команда слишком старая - $(hostname)" https://api.pushover.net/1/messages.json             
+                fi
+        else
+            postfix=$(date '+%Y%m%d%H%M%S')
+
+    #         openaps-use pump bolus rawbolus/smb-cmd.json 1> rawbolus/smb-cmd-reply-$postfix.json 2> rawbolus/smb-cmd-reply-$postfix.json
+    # mdt bolus does not work on the 723 yet. Only tested on 722 pump
+    # press ESC four times on the pump to exit Bolus Wizard before SMBing, to help prevent A52 errors
+            echo -n "Sending ESC ESC, ESC ESC ESC ESC to exit any open menus before Direct Bolus "
+            try_return mdt -f internal button esc esc 2>&3 \
+            && sleep 0.5s \
+            && try_return mdt -f internal button esc esc esc esc |& tee -a /var/log/openaps/cgm-loop.log >&3 \
+            && echo -n "and bolusing " && jq .units rawbolus/smb-cmd.json | nonl && echo " units"  \
+            && ( try_return mdt bolus rawbolus/smb-cmd.json |& tee -a /var/log/openaps/cgm-loop.log >&3 && jq '.  + {"received": true}' rawbolus/smb-cmd.json > rawbolus/smb-cmd-reply-$postfix.json )
+
+            #(grep -q '"received": true')
+            if (grep -q '"received": true' rawbolus/smb-cmd-reply-$postfix.json); then
+                mv rawbolus/smb-cmd.json rawbolus/smb-cmd-done.json.$postfix
+                echo "BOLUS:OK " 
+                if [[ -n $PUSHOVER_TOKEN ]] && [[ -n $PUSHOVER_USER ]]; then
+                    SOUND="none"
+                    BFILE="rawbolus/smb-cmd-done.json.$postfix"
+                    curl -s -F "token=$PUSHOVER_TOKEN" -F "user=$PUSHOVER_USER" -F "sound=$SOUND" -F "message=Добавлено инсулина: $(jq -c '(.units|tostring)' $BFILE)U - $(hostname)" https://api.pushover.net/1/messages.json             
+                fi
+            else
+                mv rawbolus/smb-cmd.json rawbolus/smb-cmd-stop.json.$postfix
+                echo "BOLUS:ERR something wrong" 
+                  if [[ -n $PUSHOVER_TOKEN ]] && [[ -n $PUSHOVER_USER ]]; then
+                    SOUND="none"
+                    BFILE="rawbolus/smb-cmd-stop.json.$postfix"
+                    curl -s -F "token=$PUSHOVER_TOKEN" -F "user=$PUSHOVER_USER" -F "sound=$SOUND" -F "message=Не получается добавить $(jq -c '(.units|tostring)' $BFILE)U инсулина, повторите команду - $(hostname)" https://api.pushover.net/1/messages.json             
+                fi
+          fi
+        fi
+
+    fi
+    true
+}
+# #################  myown end ##############################
 
 main "$@"
